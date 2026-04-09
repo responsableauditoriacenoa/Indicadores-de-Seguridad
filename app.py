@@ -140,7 +140,8 @@ def extract_totals(rows: list[list[str]], specs: list[dict[str, object]]) -> pd.
     for spec in specs:
         month = spec["month"]
         metric = clean_text(spec["metric"])
-        if month is None or not metric:
+        field = clean_text(spec["field"])
+        if month is None or not metric or field != "Importe":
             continue
         value = parse_number(total_row[spec["column"]]) if spec["column"] < len(total_row) else None
         if value is None:
@@ -313,11 +314,29 @@ def kpi_snapshot(data: DashboardData) -> dict[str, object]:
 
 
 def build_monthly_chart(totals: pd.DataFrame) -> go.Figure:
-    pivot = totals.pivot(index="month", columns="metric", values="value").reset_index()
+    pivot = (
+        totals.pivot_table(index="month", columns="metric", values="value", aggfunc="sum")
+        .reset_index()
+        .fillna(0)
+    )
     pivot["label"] = pivot["month"].dt.strftime("%b-%y")
     figure = go.Figure()
-    figure.add_trace(go.Bar(x=pivot["label"], y=pivot["Proyectado"], name="Proyectado", marker_color="#A0AEC0"))
-    figure.add_trace(go.Bar(x=pivot["label"], y=pivot["Facturado"], name="Facturado", marker_color="#0F766E"))
+    figure.add_trace(
+        go.Bar(
+            x=pivot["label"],
+            y=pivot["Proyectado"] if "Proyectado" in pivot.columns else 0,
+            name="Proyectado",
+            marker_color="#A0AEC0",
+        )
+    )
+    figure.add_trace(
+        go.Bar(
+            x=pivot["label"],
+            y=pivot["Facturado"] if "Facturado" in pivot.columns else 0,
+            name="Facturado",
+            marker_color="#0F766E",
+        )
+    )
     if "Diferencia (+/-)" in pivot.columns:
         figure.add_trace(
             go.Scatter(
