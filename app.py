@@ -39,6 +39,21 @@ BUSINESS_UNITS = {
     "KOMPAS": "Kompas",
 }
 
+MONTHS_FULL_ES = {
+    1: "Enero",
+    2: "Febrero",
+    3: "Marzo",
+    4: "Abril",
+    5: "Mayo",
+    6: "Junio",
+    7: "Julio",
+    8: "Agosto",
+    9: "Septiembre",
+    10: "Octubre",
+    11: "Noviembre",
+    12: "Diciembre",
+}
+
 
 @dataclass
 class DashboardData:
@@ -283,6 +298,10 @@ def format_delta(value: float) -> str:
     return f"{sign}$ {abs(value):,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
+def format_month_spanish(value: pd.Timestamp) -> str:
+    return f"{MONTHS_FULL_ES[value.month]} {value.year}"
+
+
 def kpi_snapshot(data: DashboardData) -> dict[str, object]:
     projected = data.totals[data.totals["metric"] == "Proyectado"].copy()
     actual = data.totals[data.totals["metric"] == "Facturado"].copy()
@@ -321,17 +340,34 @@ def aggregate_filtered_totals(services: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_monthly_chart(totals: pd.DataFrame) -> go.Figure:
+    if totals.empty:
+        figure = go.Figure()
+        figure.update_layout(
+            margin=dict(l=20, r=20, t=20, b=20),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        figure.add_annotation(
+            text="No hay datos para los filtros seleccionados.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font=dict(size=16, color="#64748B"),
+        )
+        return figure
     pivot = (
         totals.pivot_table(index="month", columns="metric", values="value", aggfunc="sum")
         .reset_index()
         .fillna(0)
     )
-    pivot["label"] = pivot["month"].dt.strftime("%b-%y")
+    pivot["label"] = pivot["month"].map(lambda value: value.strftime("%m-%y"))
     figure = go.Figure()
     figure.add_trace(
         go.Bar(
             x=pivot["label"],
-            y=pivot["Proyectado"] if "Proyectado" in pivot.columns else 0,
+            y=pivot["Proyectado"] if "Proyectado" in pivot.columns else [0] * len(pivot),
             name="Proyectado",
             marker_color="#A0AEC0",
         )
@@ -339,7 +375,7 @@ def build_monthly_chart(totals: pd.DataFrame) -> go.Figure:
     figure.add_trace(
         go.Bar(
             x=pivot["label"],
-            y=pivot["Facturado"] if "Facturado" in pivot.columns else 0,
+            y=pivot["Facturado"] if "Facturado" in pivot.columns else [0] * len(pivot),
             name="Facturado",
             marker_color="#0F766E",
         )
@@ -378,6 +414,23 @@ def build_filtered_unit_chart(services: pd.DataFrame, month: pd.Timestamp) -> go
         .sum()
         .sort_values("value", ascending=True)
     )
+    if latest.empty:
+        figure = go.Figure()
+        figure.update_layout(
+            margin=dict(l=10, r=10, t=10, b=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        figure.add_annotation(
+            text="Sin facturación para mostrar.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font=dict(size=15, color="#64748B"),
+        )
+        return figure
     figure = px.bar(
         latest,
         x="value",
@@ -460,6 +513,21 @@ def render_metric_card(title: str, value: str, caption: str) -> None:
     )
 
 
+def render_checkbox_filter(title: str, options: list[str], key_prefix: str) -> list[str]:
+    with st.sidebar.expander(title, expanded=False):
+        select_all_key = f"{key_prefix}_all"
+        if st.checkbox("Seleccionar todo", value=True, key=select_all_key):
+            selected = options
+            for option in options:
+                st.checkbox(option, value=True, key=f"{key_prefix}_{option}")
+        else:
+            selected = []
+            for option in options:
+                if st.checkbox(option, value=False, key=f"{key_prefix}_{option}"):
+                    selected.append(option)
+    return selected
+
+
 def main() -> None:
     st.set_page_config(page_title="Indicadores de Seguridad", page_icon=":bar_chart:", layout="wide")
     st.markdown(
@@ -512,23 +580,18 @@ def main() -> None:
 
     st.sidebar.title("Filtros")
     selected_month = st.sidebar.selectbox(
-        "Mes de analisis",
+        "Mes de análisis",
         options=available_months,
         index=available_months.index(default_month),
-        format_func=lambda value: value.strftime("%B %Y").title(),
+        format_func=format_month_spanish,
     )
     business_unit_options = sorted(data.services["business_unit"].dropna().unique().tolist())
-    selected_units = st.sidebar.multiselect(
-        "Unidad de negocio",
-        options=business_unit_options,
-        default=business_unit_options,
-    )
+    selected_units = render_checkbox_filter("Unidad de negocio", business_unit_options, "unidad")
     service_type_options = sorted(data.services["service_type"].dropna().unique().tolist())
-    selected_service_types = st.sidebar.multiselect(
-        "Tipo de servicio",
-        options=service_type_options,
-        default=service_type_options,
-    )
+    selected_service_types = render_checkbox_filter("Tipo de servicio", service_type_options, "servicio")
+
+    st.sidebar.caption(f"Unidades seleccionadas: {len(selected_units)}")
+    st.sidebar.caption(f"Tipos seleccionados: {len(selected_service_types)}")
 
     filtered_services = data.services[
         data.services["business_unit"].isin(selected_units) & data.services["service_type"].isin(selected_service_types)
@@ -545,25 +608,25 @@ def main() -> None:
     selected_actual = float(month_totals.get("Facturado", 0.0))
     selected_variance = float(month_totals.get("Diferencia (+/-)", selected_actual - selected_projected))
     selected_attainment = (selected_actual / selected_projected) if selected_projected else 0.0
-    selected_month_label = selected_month.strftime("%B %Y").title()
+    selected_month_label = format_month_spanish(selected_month)
 
     st.title("Indicadores de Seguridad")
     st.caption(
-        "Dashboard ejecutivo para accionistas con foco en facturacion, desvios operativos, mix por unidad y ahorro estimado."
+        "Dashboard ejecutivo para accionistas con foco en facturación, desvíos operativos, mix por unidad y ahorro estimado."
     )
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        render_metric_card("Facturacion filtrada", format_currency(selected_actual), f"Facturado en {selected_month_label}")
+        render_metric_card("Facturación filtrada", format_currency(selected_actual), f"Facturado en {selected_month_label}")
     with col2:
         render_metric_card(
-            "Cumplimiento vs proyeccion",
+            "Cumplimiento vs proyección",
             f"{selected_attainment:.1%}",
-            f"Desvio del mes {format_delta(selected_variance)}",
+            f"Desvío del mes {format_delta(selected_variance)}",
         )
     with col3:
         render_metric_card(
-            "Proyeccion filtrada",
+            "Proyección filtrada",
             format_currency(selected_projected),
             f"Presupuesto para {selected_month_label}",
         )
@@ -571,12 +634,12 @@ def main() -> None:
         render_metric_card(
             "Ahorro esperado",
             format_currency(snapshot["latest_savings_value"]),
-            f"Ultimo dato de ahorro: {snapshot['latest_savings_month'].strftime('%b-%y')}",
+            f"Último dato de ahorro: {snapshot['latest_savings_month'].strftime('%b-%y')}",
         )
 
     left, right = st.columns([1.65, 1])
     with left:
-        st.markdown('<div class="block-title">Evolucion mensual</div>', unsafe_allow_html=True)
+        st.markdown('<div class="block-title">Evolución mensual</div>', unsafe_allow_html=True)
         st.plotly_chart(build_monthly_chart(filtered_totals), use_container_width=True)
     with right:
         st.markdown('<div class="block-title">Mix por unidad de negocio</div>', unsafe_allow_html=True)
@@ -597,10 +660,10 @@ def main() -> None:
 
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown('<div class="block-title">Mayores desvios negativos</div>', unsafe_allow_html=True)
+        st.markdown('<div class="block-title">Mayores desvíos negativos</div>', unsafe_allow_html=True)
         st.dataframe(negative, use_container_width=True, hide_index=True)
     with c2:
-        st.markdown('<div class="block-title">Mayores desvios positivos</div>', unsafe_allow_html=True)
+        st.markdown('<div class="block-title">Mayores desvíos positivos</div>', unsafe_allow_html=True)
         st.dataframe(positive, use_container_width=True, hide_index=True)
 
     lower_left, lower_right = st.columns([1.15, 1])
@@ -626,24 +689,24 @@ def main() -> None:
         best_service = variance_table.iloc[-1] if not variance_table.empty else None
         bullets = [
             (
-                f"En {selected_month_label}, la unidad con mayor facturacion fue {strongest_unit['business_unit']} "
+                f"En {selected_month_label}, la unidad con mayor facturación fue {strongest_unit['business_unit']} "
                 f"con {format_currency(strongest_unit['value'])}."
                 if strongest_unit is not None
-                else "No hay facturacion disponible para los filtros seleccionados."
+                else "No hay facturación disponible para los filtros seleccionados."
             ),
             (
-                f"El mayor desvio negativo del mes fue {weakest_service['concept']} "
+                f"El mayor desvío negativo del mes fue {weakest_service['concept']} "
                 f"con {format_delta(weakest_service['Diferencia (+/-)'])}."
                 if weakest_service is not None
-                else "No hay desvios disponibles para los filtros seleccionados."
+                else "No hay desvíos disponibles para los filtros seleccionados."
             ),
             (
-                f"El principal desvio positivo fue {best_service['concept']} "
+                f"El principal desvío positivo fue {best_service['concept']} "
                 f"con {format_delta(best_service['Diferencia (+/-)'])}."
                 if best_service is not None
-                else "No hay desvios positivos disponibles para los filtros seleccionados."
+                else "No hay desvíos positivos disponibles para los filtros seleccionados."
             ),
-            "El calculo de ahorro toma el bloque comparativo provisto en la hoja y conviene leerlo desde marzo 2026 por la nota operativa de cierre de instalaciones.",
+            "El cálculo de ahorro toma el bloque comparativo provisto en la hoja y conviene leerlo desde marzo 2026 por la nota operativa de cierre de instalaciones.",
         ]
         for bullet in bullets:
             st.markdown(f"- {bullet}")
