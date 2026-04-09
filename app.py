@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from io import StringIO
-from typing import Iterable
+import unicodedata
 
 import pandas as pd
 import plotly.express as px
@@ -68,6 +68,13 @@ def clean_text(value: object) -> str:
     return str(value).replace("\ufeff", "").strip()
 
 
+def normalize_text(value: object) -> str:
+    cleaned = clean_text(value)
+    normalized = unicodedata.normalize("NFKD", cleaned)
+    normalized = "".join(char for char in normalized if not unicodedata.combining(char)).lower()
+    return normalized.replace("a3", "o")
+
+
 def parse_number(value: object) -> float | None:
     text = clean_text(value)
     if not text:
@@ -128,8 +135,10 @@ def build_column_specs(rows: list[list[str]]) -> list[dict[str, object]]:
 
 
 def section_index(rows: list[list[str]], label: str) -> int:
+    expected = normalize_text(label)
     for index, row in enumerate(rows):
-        if clean_text(row[0]).lower() == label.lower():
+        current = normalize_text(row[0])
+        if current == expected:
             return index
     raise ValueError(f"No se encontro la seccion {label!r}.")
 
@@ -147,12 +156,11 @@ def extract_totals(rows: list[list[str]], specs: list[dict[str, object]]) -> pd.
         if value is None:
             continue
         records.append({"month": month, "metric": metric, "value": value})
-    frame = pd.DataFrame(records)
-    return frame.sort_values(["month", "metric"]).reset_index(drop=True)
+    return pd.DataFrame(records).sort_values(["month", "metric"]).reset_index(drop=True)
 
 
 def extract_services(rows: list[list[str]], specs: list[dict[str, object]]) -> pd.DataFrame:
-    start = section_index(rows, "Servicios Proyección") + 2
+    start = section_index(rows, "Servicios ProyecciÃ³n") + 2
     end = section_index(rows, "Subtotales")
     records = []
     for row in rows[start:end]:
@@ -172,7 +180,8 @@ def extract_services(rows: list[list[str]], specs: list[dict[str, object]]) -> p
             if field == "Importe":
                 value = parse_number(raw_value)
             else:
-                value = parse_number(raw_value) if parse_number(raw_value) is not None else clean_text(raw_value)
+                parsed = parse_number(raw_value)
+                value = parsed if parsed is not None else clean_text(raw_value)
             if value in (None, ""):
                 continue
             records.append(
@@ -186,8 +195,7 @@ def extract_services(rows: list[list[str]], specs: list[dict[str, object]]) -> p
                     "value": value,
                 }
             )
-    frame = pd.DataFrame(records)
-    return frame
+    return pd.DataFrame(records)
 
 
 def extract_subtotals(rows: list[list[str]], specs: list[dict[str, object]]) -> pd.DataFrame:
@@ -275,24 +283,14 @@ def format_delta(value: float) -> str:
     return f"{sign}$ {abs(value):,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-def latest_month_with_metric(frame: pd.DataFrame, metric: str) -> pd.Timestamp:
-    filtered = frame[frame["metric"] == metric]
-    return filtered["month"].max()
-
-
 def kpi_snapshot(data: DashboardData) -> dict[str, object]:
     projected = data.totals[data.totals["metric"] == "Proyectado"].copy()
     actual = data.totals[data.totals["metric"] == "Facturado"].copy()
     merged = projected.merge(actual, on="month", suffixes=("_projected", "_actual"))
-    merged = merged.sort_values("month")
     latest_actual = merged["month"].max()
     actual_ytd = merged["value_actual"].sum()
     projected_ytd = merged["value_projected"].sum()
     variance = actual_ytd - projected_ytd
-    attainment = (actual_ytd / projected_ytd) if projected_ytd else 0
-    latest_row = merged[merged["month"] == latest_actual].iloc[0]
-    future_projection = projected[projected["month"] >= latest_actual]["value"].sum()
-    annual_run_rate = merged["value_actual"].sum() + future_projection - latest_row["value_projected"]
     latest_savings_month = data.savings["month"].max()
     latest_savings_value = (
         data.savings[
@@ -306,11 +304,20 @@ def kpi_snapshot(data: DashboardData) -> dict[str, object]:
         "actual_ytd": actual_ytd,
         "projected_ytd": projected_ytd,
         "variance": variance,
-        "attainment": attainment,
-        "annual_run_rate": annual_run_rate,
         "latest_savings_month": latest_savings_month,
         "latest_savings_value": latest_savings_value,
     }
+
+
+def aggregate_filtered_totals(services: pd.DataFrame) -> pd.DataFrame:
+    amount_rows = services[services["field"] == "Importe"].copy()
+    amount_rows["value"] = pd.to_numeric(amount_rows["value"], errors="coerce")
+    amount_rows = amount_rows.dropna(subset=["value"])
+    return (
+        amount_rows.groupby(["month", "metric"], as_index=False)["value"]
+        .sum()
+        .sort_values(["month", "metric"])
+    )
 
 
 def build_monthly_chart(totals: pd.DataFrame) -> go.Figure:
@@ -342,7 +349,7 @@ def build_monthly_chart(totals: pd.DataFrame) -> go.Figure:
             go.Scatter(
                 x=pivot["label"],
                 y=pivot["Diferencia (+/-)"],
-                name="Desvío",
+                name="Desvio",
                 mode="lines+markers",
                 marker_color="#C2410C",
                 yaxis="y2",
@@ -353,16 +360,24 @@ def build_monthly_chart(totals: pd.DataFrame) -> go.Figure:
         margin=dict(l=20, r=20, t=20, b=20),
         legend=dict(orientation="h", y=1.08),
         yaxis_title="Ingresos",
-        yaxis2=dict(overlaying="y", side="right", title="Desvío"),
+        yaxis2=dict(overlaying="y", side="right", title="Desvio"),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
     )
     return figure
 
 
-def build_unit_chart(subtotals: pd.DataFrame, month: pd.Timestamp) -> go.Figure:
-    latest = subtotals[(subtotals["month"] == month) & (subtotals["metric"] == "Facturado")].copy()
-    latest = latest.sort_values("value", ascending=True)
+def build_filtered_unit_chart(services: pd.DataFrame, month: pd.Timestamp) -> go.Figure:
+    amount_rows = services[
+        (services["field"] == "Importe") & (services["month"] == month) & (services["metric"] == "Facturado")
+    ].copy()
+    amount_rows["value"] = pd.to_numeric(amount_rows["value"], errors="coerce")
+    latest = (
+        amount_rows.dropna(subset=["value"])
+        .groupby("business_unit", as_index=False)["value"]
+        .sum()
+        .sort_values("value", ascending=True)
+    )
     figure = px.bar(
         latest,
         x="value",
@@ -400,8 +415,7 @@ def build_service_variance_table(services: pd.DataFrame, month: pd.Timestamp) ->
         lambda row: row["Facturado"] / row["Proyectado"] if pd.notna(row["Proyectado"]) and row["Proyectado"] else None,
         axis=1,
     )
-    pivot = pivot.sort_values("Diferencia (+/-)")
-    return pivot
+    return pivot.sort_values("Diferencia (+/-)")
 
 
 def build_savings_chart(savings: pd.DataFrame) -> go.Figure:
@@ -491,53 +505,83 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    st.sidebar.title("Fuente")
-    sheet_url = st.sidebar.text_input("CSV de Google Sheets", DEFAULT_SHEET_URL)
-    data = load_dashboard_data(sheet_url)
+    data = load_dashboard_data(DEFAULT_SHEET_URL)
     snapshot = kpi_snapshot(data)
-    latest_month = snapshot["latest_actual"]
-    latest_month_label = latest_month.strftime("%B %Y").title()
+    available_months = sorted(data.services["month"].dropna().unique().tolist())
+    default_month = snapshot["latest_actual"] if snapshot["latest_actual"] in available_months else available_months[-1]
+
+    st.sidebar.title("Filtros")
+    selected_month = st.sidebar.selectbox(
+        "Mes de analisis",
+        options=available_months,
+        index=available_months.index(default_month),
+        format_func=lambda value: value.strftime("%B %Y").title(),
+    )
+    business_unit_options = sorted(data.services["business_unit"].dropna().unique().tolist())
+    selected_units = st.sidebar.multiselect(
+        "Unidad de negocio",
+        options=business_unit_options,
+        default=business_unit_options,
+    )
+    service_type_options = sorted(data.services["service_type"].dropna().unique().tolist())
+    selected_service_types = st.sidebar.multiselect(
+        "Tipo de servicio",
+        options=service_type_options,
+        default=service_type_options,
+    )
+
+    filtered_services = data.services[
+        data.services["business_unit"].isin(selected_units) & data.services["service_type"].isin(selected_service_types)
+    ].copy()
+    filtered_totals = aggregate_filtered_totals(filtered_services)
+    variance_table = build_service_variance_table(filtered_services, selected_month)
+
+    month_totals = (
+        filtered_totals[filtered_totals["month"] == selected_month].set_index("metric")["value"].to_dict()
+        if not filtered_totals.empty
+        else {}
+    )
+    selected_projected = float(month_totals.get("Proyectado", 0.0))
+    selected_actual = float(month_totals.get("Facturado", 0.0))
+    selected_variance = float(month_totals.get("Diferencia (+/-)", selected_actual - selected_projected))
+    selected_attainment = (selected_actual / selected_projected) if selected_projected else 0.0
+    selected_month_label = selected_month.strftime("%B %Y").title()
 
     st.title("Indicadores de Seguridad")
     st.caption(
-        "Dashboard ejecutivo para accionistas con foco en facturación, desvíos operativos, mix por unidad y ahorro estimado."
+        "Dashboard ejecutivo para accionistas con foco en facturacion, desvios operativos, mix por unidad y ahorro estimado."
     )
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        render_metric_card(
-            "Facturación real acumulada",
-            format_currency(snapshot["actual_ytd"]),
-            f"Mes real más reciente: {latest_month_label}",
-        )
+        render_metric_card("Facturacion filtrada", format_currency(selected_actual), f"Facturado en {selected_month_label}")
     with col2:
         render_metric_card(
-            "Cumplimiento vs proyección",
-            f"{snapshot['attainment']:.1%}",
-            f"Desvío acumulado {format_delta(snapshot['variance'])}",
+            "Cumplimiento vs proyeccion",
+            f"{selected_attainment:.1%}",
+            f"Desvio del mes {format_delta(selected_variance)}",
         )
     with col3:
         render_metric_card(
-            "Run rate anual",
-            format_currency(snapshot["annual_run_rate"]),
-            "Real acumulado + proyección pendiente",
+            "Proyeccion filtrada",
+            format_currency(selected_projected),
+            f"Presupuesto para {selected_month_label}",
         )
     with col4:
         render_metric_card(
             "Ahorro esperado",
             format_currency(snapshot["latest_savings_value"]),
-            f"Último dato de ahorro: {snapshot['latest_savings_month'].strftime('%b-%y')}",
+            f"Ultimo dato de ahorro: {snapshot['latest_savings_month'].strftime('%b-%y')}",
         )
 
     left, right = st.columns([1.65, 1])
     with left:
-        st.markdown('<div class="block-title">Evolución mensual</div>', unsafe_allow_html=True)
-        st.plotly_chart(build_monthly_chart(data.totals), use_container_width=True)
+        st.markdown('<div class="block-title">Evolucion mensual</div>', unsafe_allow_html=True)
+        st.plotly_chart(build_monthly_chart(filtered_totals), use_container_width=True)
     with right:
         st.markdown('<div class="block-title">Mix por unidad de negocio</div>', unsafe_allow_html=True)
-        st.plotly_chart(build_unit_chart(data.subtotals, latest_month), use_container_width=True)
+        st.plotly_chart(build_filtered_unit_chart(filtered_services, selected_month), use_container_width=True)
 
-    variance_table = build_service_variance_table(data.services, latest_month)
     negative = variance_table.nsmallest(8, "Diferencia (+/-)")[
         ["concept", "business_unit", "service_type", "Proyectado", "Facturado", "Diferencia (+/-)", "cumplimiento"]
     ].copy()
@@ -553,10 +597,10 @@ def main() -> None:
 
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown('<div class="block-title">Mayores desvíos negativos</div>', unsafe_allow_html=True)
+        st.markdown('<div class="block-title">Mayores desvios negativos</div>', unsafe_allow_html=True)
         st.dataframe(negative, use_container_width=True, hide_index=True)
     with c2:
-        st.markdown('<div class="block-title">Mayores desvíos positivos</div>', unsafe_allow_html=True)
+        st.markdown('<div class="block-title">Mayores desvios positivos</div>', unsafe_allow_html=True)
         st.dataframe(positive, use_container_width=True, hide_index=True)
 
     lower_left, lower_right = st.columns([1.15, 1])
@@ -565,18 +609,41 @@ def main() -> None:
         st.plotly_chart(build_savings_chart(data.savings), use_container_width=True)
     with lower_right:
         st.markdown('<div class="block-title">Lecturas para accionistas</div>', unsafe_allow_html=True)
-        strongest_unit = (
-            data.subtotals[(data.subtotals["month"] == latest_month) & (data.subtotals["metric"] == "Facturado")]
+        strongest_units = (
+            filtered_services[
+                (filtered_services["field"] == "Importe")
+                & (filtered_services["metric"] == "Facturado")
+                & (filtered_services["month"] == selected_month)
+            ]
+            .assign(value=lambda frame: pd.to_numeric(frame["value"], errors="coerce"))
+            .dropna(subset=["value"])
+            .groupby("business_unit", as_index=False)["value"]
+            .sum()
             .sort_values("value", ascending=False)
-            .iloc[0]
         )
-        weakest_service = variance_table.iloc[0]
-        best_service = variance_table.iloc[-1]
+        strongest_unit = strongest_units.iloc[0] if not strongest_units.empty else None
+        weakest_service = variance_table.iloc[0] if not variance_table.empty else None
+        best_service = variance_table.iloc[-1] if not variance_table.empty else None
         bullets = [
-            f"En {latest_month_label}, la unidad con mayor facturación fue {strongest_unit['business_unit']} con {format_currency(strongest_unit['value'])}.",
-            f"El mayor desvío negativo del mes fue {weakest_service['concept']} con {format_delta(weakest_service['Diferencia (+/-)'])}.",
-            f"El principal desvío positivo fue {best_service['concept']} con {format_delta(best_service['Diferencia (+/-)'])}.",
-            "El cálculo de ahorro toma el bloque comparativo provisto en la hoja y conviene leerlo desde marzo 2026 por la nota operativa de cierre de instalaciones.",
+            (
+                f"En {selected_month_label}, la unidad con mayor facturacion fue {strongest_unit['business_unit']} "
+                f"con {format_currency(strongest_unit['value'])}."
+                if strongest_unit is not None
+                else "No hay facturacion disponible para los filtros seleccionados."
+            ),
+            (
+                f"El mayor desvio negativo del mes fue {weakest_service['concept']} "
+                f"con {format_delta(weakest_service['Diferencia (+/-)'])}."
+                if weakest_service is not None
+                else "No hay desvios disponibles para los filtros seleccionados."
+            ),
+            (
+                f"El principal desvio positivo fue {best_service['concept']} "
+                f"con {format_delta(best_service['Diferencia (+/-)'])}."
+                if best_service is not None
+                else "No hay desvios positivos disponibles para los filtros seleccionados."
+            ),
+            "El calculo de ahorro toma el bloque comparativo provisto en la hoja y conviene leerlo desde marzo 2026 por la nota operativa de cierre de instalaciones.",
         ]
         for bullet in bullets:
             st.markdown(f"- {bullet}")
