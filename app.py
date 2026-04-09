@@ -383,6 +383,8 @@ def build_unit_chart(subtotals: pd.DataFrame, month: pd.Timestamp) -> go.Figure:
 
 def build_service_variance_table(services: pd.DataFrame, month: pd.Timestamp) -> pd.DataFrame:
     amount_rows = services[(services["field"] == "Importe") & (services["month"] == month)].copy()
+    amount_rows["value"] = pd.to_numeric(amount_rows["value"], errors="coerce")
+    amount_rows = amount_rows.dropna(subset=["value"])
     pivot = amount_rows.pivot_table(
         index=["concept", "business_unit", "service_type"],
         columns="metric",
@@ -392,8 +394,10 @@ def build_service_variance_table(services: pd.DataFrame, month: pd.Timestamp) ->
     for column in ["Proyectado", "Facturado", "Diferencia (+/-)"]:
         if column not in pivot.columns:
             pivot[column] = 0.0
+        pivot[column] = pd.to_numeric(pivot[column], errors="coerce")
+    pivot["Diferencia (+/-)"] = pivot["Diferencia (+/-)"].fillna(pivot["Facturado"] - pivot["Proyectado"])
     pivot["cumplimiento"] = pivot.apply(
-        lambda row: row["Facturado"] / row["Proyectado"] if row["Proyectado"] else None,
+        lambda row: row["Facturado"] / row["Proyectado"] if pd.notna(row["Proyectado"]) and row["Proyectado"] else None,
         axis=1,
     )
     pivot = pivot.sort_values("Diferencia (+/-)")
