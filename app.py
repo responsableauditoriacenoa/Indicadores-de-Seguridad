@@ -385,7 +385,7 @@ def build_monthly_chart(totals: pd.DataFrame) -> go.Figure:
             go.Scatter(
                 x=pivot["label"],
                 y=pivot["Diferencia (+/-)"],
-                name="Desvio",
+                name="Desv\u00edo",
                 mode="lines+markers",
                 marker_color="#C2410C",
                 yaxis="y2",
@@ -396,9 +396,10 @@ def build_monthly_chart(totals: pd.DataFrame) -> go.Figure:
         margin=dict(l=20, r=20, t=20, b=20),
         legend=dict(orientation="h", y=1.08),
         yaxis_title="Ingresos",
-        yaxis2=dict(overlaying="y", side="right", title="Desvio"),
+        yaxis2=dict(overlaying="y", side="right", title="Desv\u00edo"),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Aptos, Segoe UI, sans-serif", color="#243447"),
     )
     return figure
 
@@ -445,6 +446,7 @@ def build_filtered_unit_chart(services: pd.DataFrame, month: pd.Timestamp) -> go
         coloraxis_showscale=False,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Aptos, Segoe UI, sans-serif", color="#243447"),
     )
     return figure
 
@@ -496,6 +498,7 @@ def build_savings_chart(savings: pd.DataFrame) -> go.Figure:
         legend=dict(orientation="h", y=1.1),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Aptos, Segoe UI, sans-serif", color="#243447"),
     )
     return figure
 
@@ -513,18 +516,50 @@ def render_metric_card(title: str, value: str, caption: str) -> None:
     )
 
 
+def render_hero(selected_month_label: str, selected_units: list[str], selected_service_types: list[str]) -> None:
+    unit_text = "todas las unidades" if not selected_units else f"{len(selected_units)} unidades"
+    service_text = "todos los servicios" if not selected_service_types else f"{len(selected_service_types)} tipos de servicio"
+    st.markdown(
+        f"""
+        <section class="hero-card">
+            <p class="eyebrow">Panel ejecutivo de seguridad</p>
+            <h1>Costos, desv\u00edos y ahorro a la vista</h1>
+            <p class="hero-copy">
+                Lectura de {selected_month_label}, con {unit_text} y {service_text}. 
+                La idea es mirar r\u00e1pido d\u00f3nde estamos bien, d\u00f3nde se movi\u00f3 el gasto y qu\u00e9 conviene revisar.
+            </p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_takeaway(title: str, text: str) -> None:
+    st.markdown(
+        f"""
+        <div class="takeaway-card">
+            <div class="takeaway-title">{title}</div>
+            <div class="takeaway-text">{text}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_checkbox_filter(title: str, options: list[str], key_prefix: str) -> list[str]:
     with st.sidebar.expander(title, expanded=False):
         select_all_key = f"{key_prefix}_all"
-        if st.checkbox("Seleccionar todo", value=True, key=select_all_key):
-            selected = options
-            for option in options:
-                st.checkbox(option, value=True, key=f"{key_prefix}_{option}")
-        else:
-            selected = []
-            for option in options:
-                if st.checkbox(option, value=False, key=f"{key_prefix}_{option}"):
-                    selected.append(option)
+        manual_key = f"{key_prefix}_manual"
+        use_all = st.checkbox("Incluir todo", value=True, key=select_all_key)
+        if use_all:
+            st.caption("Se incluyen todas las opciones.")
+            return options
+
+        st.caption("Marcá únicamente lo que querés ver.")
+        selected = []
+        for option in options:
+            if st.checkbox(option, value=False, key=f"{manual_key}_{option}"):
+                selected.append(option)
     return selected
 
 
@@ -535,38 +570,96 @@ def main() -> None:
         <style>
             .stApp {
                 background:
-                    radial-gradient(circle at top left, rgba(15,118,110,0.12), transparent 25%),
-                    radial-gradient(circle at top right, rgba(194,65,12,0.08), transparent 20%),
-                    linear-gradient(180deg, #F8FAFC 0%, #EEF2F7 100%);
+                    radial-gradient(circle at top left, rgba(25,94,88,0.16), transparent 28%),
+                    radial-gradient(circle at top right, rgba(190,124,62,0.12), transparent 24%),
+                    linear-gradient(180deg, #F7F3EA 0%, #EDF3EF 100%);
+                color: #243447;
+                font-family: Aptos, Segoe UI, sans-serif;
+            }
+            [data-testid="stSidebar"] {
+                background: linear-gradient(180deg, #E7EFEA 0%, #DCE7E1 100%);
+                border-right: 1px solid rgba(36, 52, 71, 0.08);
+            }
+            [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+                color: #193D39;
+            }
+            .hero-card {
+                background:
+                    linear-gradient(135deg, rgba(24,74,68,0.96), rgba(40,103,91,0.9)),
+                    radial-gradient(circle at top right, rgba(255,255,255,0.16), transparent 28%);
+                border-radius: 28px;
+                padding: 2rem 2.2rem;
+                margin: 0.2rem 0 1.25rem 0;
+                color: #F8FAFC;
+                box-shadow: 0 24px 70px rgba(24, 74, 68, 0.22);
+            }
+            .hero-card h1 {
+                font-size: clamp(2rem, 4vw, 3.6rem);
+                line-height: 0.96;
+                letter-spacing: -0.05em;
+                margin: 0.1rem 0 0.85rem 0;
+                color: #FFF8E8;
+            }
+            .hero-copy {
+                max-width: 760px;
+                color: #DCEDE6;
+                font-size: 1.05rem;
+                line-height: 1.6;
+                margin: 0;
+            }
+            .eyebrow {
+                text-transform: uppercase;
+                letter-spacing: 0.18em;
+                font-size: 0.78rem;
+                color: #F2C97D;
+                font-weight: 700;
+                margin: 0;
             }
             .metric-card {
-                background: rgba(255,255,255,0.82);
-                border: 1px solid rgba(148,163,184,0.25);
-                border-radius: 18px;
+                background: rgba(255,252,245,0.88);
+                border: 1px solid rgba(101,88,72,0.12);
+                border-radius: 22px;
                 padding: 1rem 1.1rem;
-                box-shadow: 0 18px 40px rgba(15, 23, 42, 0.06);
+                box-shadow: 0 18px 40px rgba(36, 52, 71, 0.08);
                 min-height: 138px;
             }
             .metric-title {
-                color: #475569;
+                color: #5F6F68;
                 font-size: 0.95rem;
                 margin-bottom: 0.7rem;
             }
             .metric-value {
-                color: #0F172A;
+                color: #193D39;
                 font-size: 1.85rem;
                 font-weight: 700;
                 margin-bottom: 0.35rem;
             }
             .metric-caption {
-                color: #64748B;
+                color: #6C7D76;
                 font-size: 0.92rem;
             }
             .block-title {
                 font-size: 1.15rem;
                 font-weight: 700;
-                color: #0F172A;
+                color: #193D39;
                 margin-top: 0.4rem;
+            }
+            .takeaway-card {
+                background: rgba(255,252,245,0.88);
+                border: 1px solid rgba(101,88,72,0.12);
+                border-radius: 22px;
+                padding: 1.15rem 1.25rem;
+                box-shadow: 0 18px 40px rgba(36, 52, 71, 0.08);
+                margin-bottom: 0.8rem;
+            }
+            .takeaway-title {
+                color: #193D39;
+                font-weight: 800;
+                margin-bottom: 0.45rem;
+            }
+            .takeaway-text {
+                color: #52655E;
+                line-height: 1.55;
             }
         </style>
         """,
@@ -578,20 +671,20 @@ def main() -> None:
     available_months = sorted(data.services["month"].dropna().unique().tolist())
     default_month = snapshot["latest_actual"] if snapshot["latest_actual"] in available_months else available_months[-1]
 
-    st.sidebar.title("Filtros")
+    st.sidebar.title("Ajustar vista")
     selected_month = st.sidebar.selectbox(
-        "Mes de análisis",
+        "Período",
         options=available_months,
         index=available_months.index(default_month),
         format_func=format_month_spanish,
     )
     business_unit_options = sorted(data.services["business_unit"].dropna().unique().tolist())
-    selected_units = render_checkbox_filter("Unidad de negocio", business_unit_options, "unidad")
+    selected_units = render_checkbox_filter("Empresas", business_unit_options, "unidad")
     service_type_options = sorted(data.services["service_type"].dropna().unique().tolist())
-    selected_service_types = render_checkbox_filter("Tipo de servicio", service_type_options, "servicio")
+    selected_service_types = render_checkbox_filter("Servicios", service_type_options, "servicio")
 
-    st.sidebar.caption(f"Unidades seleccionadas: {len(selected_units)}")
-    st.sidebar.caption(f"Tipos seleccionados: {len(selected_service_types)}")
+    st.sidebar.caption(f"Empresas activas: {len(selected_units)}")
+    st.sidebar.caption(f"Servicios activos: {len(selected_service_types)}")
 
     filtered_services = data.services[
         data.services["business_unit"].isin(selected_units) & data.services["service_type"].isin(selected_service_types)
@@ -610,23 +703,20 @@ def main() -> None:
     selected_attainment = (selected_actual / selected_projected) if selected_projected else 0.0
     selected_month_label = format_month_spanish(selected_month)
 
-    st.title("Indicadores de Seguridad")
-    st.caption(
-        "Dashboard ejecutivo para accionistas con foco en facturación, desvíos operativos, mix por unidad y ahorro estimado."
-    )
+    render_hero(selected_month_label, selected_units, selected_service_types)
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        render_metric_card("Facturación filtrada", format_currency(selected_actual), f"Facturado en {selected_month_label}")
+        render_metric_card("Facturación del mes", format_currency(selected_actual), f"Registrado en {selected_month_label}")
     with col2:
         render_metric_card(
-            "Cumplimiento vs proyección",
+            "Contra lo previsto",
             f"{selected_attainment:.1%}",
-            f"Desvío del mes {format_delta(selected_variance)}",
+            f"Diferencia del mes {format_delta(selected_variance)}",
         )
     with col3:
         render_metric_card(
-            "Proyección filtrada",
+            "Plan del mes",
             format_currency(selected_projected),
             f"Presupuesto para {selected_month_label}",
         )
@@ -634,15 +724,15 @@ def main() -> None:
         render_metric_card(
             "Ahorro esperado",
             format_currency(snapshot["latest_savings_value"]),
-            f"Último dato de ahorro: {snapshot['latest_savings_month'].strftime('%b-%y')}",
+            f"Último dato: {snapshot['latest_savings_month'].strftime('%m-%y')}",
         )
 
     left, right = st.columns([1.65, 1])
     with left:
-        st.markdown('<div class="block-title">Evolución mensual</div>', unsafe_allow_html=True)
+        st.markdown('<div class="block-title">Cómo viene evolucionando</div>', unsafe_allow_html=True)
         st.plotly_chart(build_monthly_chart(filtered_totals), use_container_width=True)
     with right:
-        st.markdown('<div class="block-title">Mix por unidad de negocio</div>', unsafe_allow_html=True)
+        st.markdown('<div class="block-title">Dónde se concentra el gasto</div>', unsafe_allow_html=True)
         st.plotly_chart(build_filtered_unit_chart(filtered_services, selected_month), use_container_width=True)
 
     negative = variance_table.nsmallest(8, "Diferencia (+/-)")[
@@ -657,13 +747,21 @@ def main() -> None:
         frame["Facturado"] = frame["Facturado"].map(format_currency)
         frame["Diferencia (+/-)"] = frame["Diferencia (+/-)"].map(format_delta)
         frame["cumplimiento"] = frame["cumplimiento"].map(lambda x: f"{x:.1%}" if pd.notna(x) else "-")
+    display_columns = {
+        "concept": "Servicio",
+        "business_unit": "Empresa",
+        "service_type": "Tipo",
+        "cumplimiento": "Cumplimiento",
+    }
+    negative = negative.rename(columns=display_columns)
+    positive = positive.rename(columns=display_columns)
 
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown('<div class="block-title">Mayores desvíos negativos</div>', unsafe_allow_html=True)
+        st.markdown('<div class="block-title">Para revisar</div>', unsafe_allow_html=True)
         st.dataframe(negative, use_container_width=True, hide_index=True)
     with c2:
-        st.markdown('<div class="block-title">Mayores desvíos positivos</div>', unsafe_allow_html=True)
+        st.markdown('<div class="block-title">A favor del resultado</div>', unsafe_allow_html=True)
         st.dataframe(positive, use_container_width=True, hide_index=True)
 
     lower_left, lower_right = st.columns([1.15, 1])
@@ -671,7 +769,7 @@ def main() -> None:
         st.markdown('<div class="block-title">Ahorro vs esquema anterior</div>', unsafe_allow_html=True)
         st.plotly_chart(build_savings_chart(data.savings), use_container_width=True)
     with lower_right:
-        st.markdown('<div class="block-title">Lecturas para accionistas</div>', unsafe_allow_html=True)
+        st.markdown('<div class="block-title">Lectura rápida</div>', unsafe_allow_html=True)
         strongest_units = (
             filtered_services[
                 (filtered_services["field"] == "Importe")
@@ -687,33 +785,40 @@ def main() -> None:
         strongest_unit = strongest_units.iloc[0] if not strongest_units.empty else None
         weakest_service = variance_table.iloc[0] if not variance_table.empty else None
         best_service = variance_table.iloc[-1] if not variance_table.empty else None
-        bullets = [
+        render_takeaway(
+            "Mayor peso del mes",
             (
-                f"En {selected_month_label}, la unidad con mayor facturación fue {strongest_unit['business_unit']} "
-                f"con {format_currency(strongest_unit['value'])}."
+                f"{strongest_unit['business_unit']} concentra la mayor facturación de {selected_month_label}: "
+                f"{format_currency(strongest_unit['value'])}."
                 if strongest_unit is not None
                 else "No hay facturación disponible para los filtros seleccionados."
             ),
+        )
+        render_takeaway(
+            "Atención recomendada",
             (
-                f"El mayor desvío negativo del mes fue {weakest_service['concept']} "
+                f"El desvío más sensible aparece en {weakest_service['concept']}, "
                 f"con {format_delta(weakest_service['Diferencia (+/-)'])}."
                 if weakest_service is not None
                 else "No hay desvíos disponibles para los filtros seleccionados."
             ),
+        )
+        render_takeaway(
+            "Punto a favor",
             (
-                f"El principal desvío positivo fue {best_service['concept']} "
+                f"El mejor desvío del mes viene de {best_service['concept']}, "
                 f"con {format_delta(best_service['Diferencia (+/-)'])}."
                 if best_service is not None
                 else "No hay desvíos positivos disponibles para los filtros seleccionados."
             ),
-            "El cálculo de ahorro toma el bloque comparativo provisto en la hoja y conviene leerlo desde marzo 2026 por la nota operativa de cierre de instalaciones.",
-        ]
-        for bullet in bullets:
-            st.markdown(f"- {bullet}")
+        )
+        st.caption(
+            "Nota: el ahorro se lee desde el bloque comparativo de la hoja. La planilla indica revisar la serie desde marzo 2026 por el cierre de instalaciones."
+        )
         if data.notes:
-            st.markdown("**Notas de origen**")
-            for note in data.notes:
-                st.caption(note)
+            with st.expander("Supuestos de lectura"):
+                for note in data.notes:
+                    st.caption(note)
 
 
 if __name__ == "__main__":
